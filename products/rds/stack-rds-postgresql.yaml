@@ -1,0 +1,380 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: GRE / Deploy an Amazon RDS database instance
+Parameters:
+  ApplicationName:
+    Description: The name of application
+    Type: String
+    AllowedPattern: '[a-z0-9\-]*'
+    ConstraintDescription: Can contain only lower letters, numbers and hyphens.
+    MinLength: 1
+  EnvironmentName:
+    Description: The name of application
+    Type: String
+    Default: i1
+    AllowedPattern: '[a-z0-9\-]*'
+    ConstraintDescription: Can contain only lower letters, numbers and hyphens.
+    MinLength: 1
+  AccountAlias:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: '/account/alias'
+    AllowedValues:
+      - '/account/alias'
+    Description: Do not change this parameter.
+  DatabaseEngineVersion:
+    Description: The version of the database engine for PostgreSQL
+    Type: String
+    Default: "10.9"
+    AllowedValues:
+      - "9.6.1"
+      - "9.6.2"
+      - "9.6.3"
+      - "9.6.5"
+      - "9.6.6"
+      - "9.6.8"
+      - "9.6.9"
+      - "9.6.10"
+      - "9.6.11"
+      - "9.6.12"
+      - "9.6.14"
+      - "9.6.15"
+      - "9.6.16"
+      - "10.1"
+      - "10.3"
+      - "10.4"
+      - "10.5"
+      - "10.6"
+      - "10.7"
+      - "10.9"
+      - "10.10"
+      - "10.11"
+      - "11.1"
+      - "11.2"
+      - "11.4"
+      - "11.5"
+      - "11.6"
+      - "12.3"
+    ConstraintDescription: must select a valid major engine version
+  DBClass:
+    Description: Database instance class
+    Type: String
+    Default: db.t3.micro
+    AllowedValues:
+      - db.m4.xlarge
+      - db.r3.large
+      - db.r3.xlarge
+      - db.t3.micro
+      - db.t3.small
+      - db.t3.medium
+      - db.t3.large
+    ConstraintDescription: must select a valid database instance type.
+  DBName:
+    Default: mydb
+    Description: The new database name or The name of a database restored if snapshot name is completed
+    Type: String
+    MinLength: '1'
+    MaxLength: '64'
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+    ConstraintDescription: must begin with a letter and contain only alphanumeric characters.
+  DBSnapshotName:
+    Description: The name of a database snapshot (optional)
+    Default: ""
+    Type: String
+  DBAllocatedStorage:
+    Default: '5'
+    Description: The size of the database (Gb)
+    Type: Number
+    MinValue: '5'
+    MaxValue: '1024'
+    ConstraintDescription: must be between 5 and 1024Gb.
+  DBStorageType:
+    Default: gp2
+    Description: The storage type of the DB instance.
+    Type: String
+  DBIops:
+    Description: The number of I/O operations per second (IOPS) that the database provisions.
+    Type: Number
+    Default: 1000
+
+Mappings:
+  ParameterGroupMap:
+    9.6.1:
+      family: postgres9.6
+      s3Import: "false"
+    9.6.2:
+      family: postgres9.6
+      s3Import: "false"
+    9.6.3:
+      family: postgres9.6
+      s3Import: "false"
+    9.6.5:
+      family: postgres9.6
+      s3Import: "false"
+    9.6.6:
+      family: postgres9.6
+      s3Import: "false"
+    9.6.8:
+      family: postgres9.6
+      s3Import: "false"
+    9.6.9:
+      family: postgres9.6
+      s3Import: "false"
+    9.6.10:
+      family: postgres9.6
+      s3Import: "false"
+    9.6.11:
+      family: postgres9.6
+      s3Import: "false"
+    9.6.12:
+      family: postgres9.6
+      s3Import: "false"
+    9.6.14:
+      family: postgres9.6
+      s3Import: "false"
+    9.6.15:
+      family: postgres9.6
+      s3Import: "false"
+    9.6.16:
+      family: postgres9.6
+      s3Import: "false"
+    '10.1':
+      family: postgres10
+      s3Import: "false"
+    '10.3':
+      family: postgres10
+      s3Import: "false"
+    '10.4':
+      family: postgres10
+      s3Import: "false"
+    '10.5':
+      family: postgres10
+      s3Import: "false"
+    '10.6':
+      family: postgres10
+      s3Import: "false"
+    '10.7':
+      family: postgres10
+      s3Import: "true"
+    '10.9':
+      family: postgres10
+      s3Import: "true"
+    '10.10':
+      family: postgres10
+      s3Import: "true"
+    '10.11':
+      family: postgres10
+      s3Import: "true"
+    '11.1':
+      family: postgres11
+      s3Import: "true"
+    '11.2':
+      family: postgres11
+      s3Import: "true"
+    '11.4':
+      family: postgres11
+      s3Import: "true"
+    '11.5':
+      family: postgres11
+      s3Import: "true"
+    '11.6':
+      family: postgres11
+      s3Import: "true"
+    '12.3':
+      family: postgres12
+      s3Import: "true"
+
+Conditions:
+  IsPostGreSQLv10OrMore: !Not
+    - !Equals
+      - !Select
+        - '0'
+        - !Split
+          - .
+          - !Ref DatabaseEngineVersion
+      - '9'
+  UseDBSnapshot: !Not [!Equals [!Ref DBSnapshotName, ""]]
+  IsProd: !Equals [!Ref AccountAlias, "prod"]
+  IsS3ImportSupported: !Equals [!FindInMap [ ParameterGroupMap, !Ref DatabaseEngineVersion, s3Import], "true"]
+  IsIops: !Equals [!Ref DBStorageType, "io1"]
+
+Resources:
+  #This is a Secret resource with a randomly generated password in its SecretString JSON.
+  MyRDSInstanceRotationSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub 'This is my ${DBName} instance secret'
+      Name: !Join
+        - ''
+        - - '/'
+          - !Ref EnvironmentName
+          - '/'
+          - 'databases'
+          - '/'
+          - !Ref DBName
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "Administrateur"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 16
+        ExcludePunctuation: true
+
+  DBEC2SecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Open database for access
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '5432'
+          ToPort: '5432'
+          CidrIp:
+            Fn::ImportValue:
+              !Sub "gre-${AccountAlias}-vpc-VpcCidr"
+      VpcId:
+        Fn::ImportValue:
+          !Sub "gre-${AccountAlias}-vpc-Vpcid"
+
+  DBRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub ${ApplicationName}-${EnvironmentName}-DBRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: rds.amazonaws.com
+            Action: 'sts:AssumeRole'
+
+  DBInstance:
+    Type: 'AWS::RDS::DBInstance'
+    DeletionPolicy: Snapshot
+    Properties:
+      DBName: !If [UseDBSnapshot, !Ref "AWS::NoValue", !Ref DBName ]
+      AssociatedRoles:
+        !If
+        - IsS3ImportSupported
+        - - FeatureName: s3Import
+            RoleArn: !GetAtt DBRole.Arn
+        - !Ref "AWS::NoValue"
+      DBSnapshotIdentifier: !If [UseDBSnapshot, !Ref DBSnapshotName, !Ref "AWS::NoValue"]
+      DBInstanceIdentifier: !Sub ${ApplicationName}-${EnvironmentName}
+      CopyTagsToSnapshot: true
+      PreferredMaintenanceWindow: !If
+        - IsProd
+        - 'sun:01:00-sun:01:30'
+        - 'mon:06:00-mon:06:30'
+      PreferredBackupWindow: !If
+        - IsProd
+        - '03:00-03:30'
+        - '06:30-07:00'
+      Engine: postgres
+      #KmsKeyId Transform by MacroGetKms
+      KmsKeyId:
+        'Fn::Transform':
+          - Name: 'GetKMSIdFromKmsAlias'
+            Parameters:
+              KmsKeyAlias: !Join
+                - ''
+                - - !Sub 'alias/gre/rds/'
+                  - !Ref ApplicationName
+                  - '/'
+                  - !Ref AccountAlias
+      StorageEncrypted: true
+      StorageType: !Ref DBStorageType
+      Iops: !If [IsIops, !Ref DBIops, !Ref "AWS::NoValue" ]
+      MaxAllocatedStorage: 100
+      EngineVersion: !Ref DatabaseEngineVersion
+      MultiAZ: !If
+        - IsProd
+        - 'true'
+        - 'false'
+      MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref MyRDSInstanceRotationSecret, ':SecretString:username}}' ]]
+      MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref MyRDSInstanceRotationSecret, ':SecretString:password}}' ]]
+      DBInstanceClass: !Ref DBClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      AutoMinorVersionUpgrade : false
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      AllowMajorVersionUpgrade: true
+      BackupRetentionPeriod: 7
+      EnablePerformanceInsights: !If
+        - IsPostGreSQLv10OrMore
+        - 'true'
+        - 'false'
+      VPCSecurityGroups:
+        - !GetAtt
+          - DBEC2SecurityGroup
+          - GroupId
+      Tags:
+        - Key: "backup"
+          Value: "true"
+  #This is a SecretTargetAttachment resource which updates the referenced Secret resource with properties about
+  #the referenced RDS instance
+  SecretRDSInstanceAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref MyRDSInstanceRotationSecret
+      TargetId: !Ref DBInstance
+      TargetType: AWS::RDS::DBInstance
+
+  RDSSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupDescription: RDS subnet group
+      SubnetIds:
+        - Fn::ImportValue:
+            !Sub "gre-${AccountAlias}-vpc-DbSubnetAZaid"
+        - Fn::ImportValue:
+            !Sub "gre-${AccountAlias}-vpc-DbSubnetAZbid"
+        - Fn::ImportValue:
+            !Sub "gre-${AccountAlias}-vpc-DbSubnetAZcid"
+
+  RecordSet:
+    Type: 'AWS::Route53::RecordSetGroup'
+    Properties:
+      Comment: !Sub "Proxy alias for DBName"
+      HostedZoneId:
+        Fn::ImportValue: 'gre-hostedZoneId'
+      RecordSets:
+        - Name: !Join
+            - ''
+            - - !Sub "rds-"
+              - !Ref ApplicationName
+              - '-'
+              - !Ref EnvironmentName
+              - '.'
+              - Fn::ImportValue:
+                  'gre-hostedZoneName'
+              - '.'
+          Type: CNAME
+          TTL: '900'
+          ResourceRecords:
+            - !GetAtt [DBInstance,Endpoint.Address]
+
+Outputs:
+  DBInstanceIdentifier:
+    Value: !Sub ${ApplicationName}-${EnvironmentName}
+    Description: Database identifier
+  DBEndpointAddress:
+    Value: !GetAtt
+      - DBInstance
+      - Endpoint.Address
+    Description: Database Address
+  DBEndpointPort:
+    Value: !GetAtt
+      - DBInstance
+      - Endpoint.Port
+    Description: Database port
+  DBEndpointAlias:
+    Value: !Join
+      - ''
+      - - !Sub "rds-"
+        - !Ref ApplicationName
+        - '-'
+        - !Ref EnvironmentName
+        - '.'
+        - Fn::ImportValue:
+            'gre-hostedZoneName'
+    Description: Database Alias
+  DBRole:
+    Description: The database role name
+    Value: !Ref DBRole
+    Export:
+      Name: !Sub ${ApplicationName}-${EnvironmentName}-DBRole

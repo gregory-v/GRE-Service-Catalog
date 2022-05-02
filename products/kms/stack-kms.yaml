@@ -1,0 +1,151 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  AccountAlias:
+    Description: The name of the AWS account
+    Type: String
+    Default: sandbox
+    AllowedValues:
+      - 'sandbox'
+      - 'dev'
+      - 'qa'
+      - 'preprod'
+      - 'prod'
+  ApplicationName:
+    Description: The name of application
+    Type: String
+    AllowedPattern: '[a-z0-9\-]*'
+    ConstraintDescription: Can contain only lower letters, numbers and hyphens.
+    MinLength: 1
+  Type:
+    Description: The name of application
+    Type: String
+    AllowedValues:
+      - s3
+      - rds
+
+Mappings:
+  ParameterAccountId:
+    'sandbox':
+      AccountId: 111111111111
+    'dev':
+      AccountId: 222222222222
+    'qa':
+      AccountId: 333333333333
+    'preprod':
+      AccountId: 444444444444
+    'prod':
+      AccountId: 555555555555
+
+Conditions:
+  IsKMSNotExist: !Not
+    - !Equals
+      - 'Fn::Transform':
+          - Name: 'isResourceExist'
+            Parameters:
+              KmsKeyAlias: !Join
+                - ''
+                - - !Sub 'alias/gre/'
+                  - !Ref Type
+                  - '/'
+                  - !Ref ApplicationName
+                  - '/'
+                  - !Ref AccountAlias
+              Type: KMS
+      - 'true'
+
+Resources:
+  KMSKey:
+    Condition: IsKMSNotExist
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Used by Assumed Roles in Dev/Test/Prod accounts to Encrypt/Decrypt code
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Id: !Ref AWS::StackName
+        Statement:
+          -
+            Sid: Allows admin of the key
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:role/KmsDeployRole
+                - Fn::ImportValue: 'KMSLaunchConstraintRoleARN'
+            Action:
+              - "kms:Create*"
+              - "kms:Describe*"
+              - "kms:Enable*"
+              - "kms:List*"
+              - "kms:Put*"
+              - "kms:Update*"
+              - "kms:Revoke*"
+              - "kms:Disable*"
+              - "kms:Get*"
+              - "kms:Delete*"
+              - "kms:TagResource"
+              - "kms:UntagResource"
+              - "kms:ScheduleKeyDeletion"
+              - "kms:CancelKeyDeletion"
+            Resource: "*"
+          -
+            Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: Allow use of the key
+            Effect: Allow
+            Principal:
+              AWS: !Join
+                - ''
+                - - !Sub 'arn:aws:iam::'
+                  - !FindInMap
+                    - ParameterAccountId
+                    - !Ref AccountAlias
+                    - AccountId
+                  - ':root'
+            Action:
+              - "kms:Encrypt"
+              - "kms:Decrypt"
+              - "kms:ReEncrypt*"
+              - "kms:GenerateDataKey*"
+              - "kms:DescribeKey"
+              - "kms:Create*"
+              - "kms:Put*"
+            Resource: "*"
+          -
+            Sid: Allow attachment of persistent resources
+            Effect: Allow
+            Principal:
+              AWS: !Join
+                - ''
+                - - !Sub 'arn:aws:iam::'
+                  - !FindInMap
+                    - ParameterAccountId
+                    - !Ref AccountAlias
+                    - AccountId
+                  - ':root'
+            Action:
+              - 'kms:CreateGrant'
+              - 'kms:ListGrants'
+              - 'kms:RevokeGrant'
+            Resource: '*'
+            Condition:
+              Bool:
+                'kms:GrantIsForAWSResource': 'true'
+  KeyAlias:
+    Condition: IsKMSNotExist
+    Type: 'AWS::KMS::Alias'
+    Properties:
+      AliasName: !Join
+        - ''
+        - - !Sub 'alias/gre/'
+          - !Ref Type
+          - '/'
+          - !Ref ApplicationName
+          - '/'
+          - !Ref AccountAlias
+      TargetKeyId: !Ref KMSKey

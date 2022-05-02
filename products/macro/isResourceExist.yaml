@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "CloudFormation Macro for Testing Existing Resources"
+Resources:
+  IsResourceExistRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: IsResourceExistRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      Path: /macro/
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: ['logs:*']
+                Resource: 'arn:aws:logs:*:*:*'
+        - PolicyName: cross-account-kms
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: ['sts:AssumeRole']
+                Resource: 'arn:aws:iam::999999999999:role/KmsDeployRole'
+  IsResourceExistFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: |
+          import traceback
+          import boto3
+          import json
+          from botocore.exceptions import ClientError
+          def handler(event, context):
+              print(json.dumps(event))
+              sts = boto3.client('sts')
+              assumedRoleObject = sts.assume_role(
+                RoleArn='arn:aws:iam::999999999999:role/KmsDeployRole',
+                RoleSessionName='session' + "999999999999",
+              )
+              credentials = assumedRoleObject['Credentials']
+              client = boto3.client(
+              'kms',
+              aws_access_key_id = credentials['AccessKeyId'],
+              aws_secret_access_key = credentials['SecretAccessKey'],
+              aws_session_token = credentials['SessionToken'],
+              )
+
+              response = {
+                  "requestId": event["requestId"],
+                  "status": "success",
+                  "fragment": "true"
+              }
+              try:
+                  input = event["params"]["KmsKeyAlias"]
+                  type = event["params"]["Type"]
+                  if type == "KMS":
+                    print('Type KMS')
+                    response_client_kms = client.describe_key(KeyId=input)
+                  elif type == "Bucket":
+                    print('Type Bucket')
+                    s3 = boto3.resource('s3')
+                    if s3.Bucket(input).creation_date is None:
+                      response["fragment"] =  'false'
+              except ClientError as e:
+                  if e.response['Error']['Code'] == 'NotFoundException':
+                    response["fragment"] =  'false'
+                  elif e.response['Error']['Code'] == 'NoSuchBucket':
+                    response["fragment"] =  'false'
+                  else:
+                    traceback.print_exc()
+                    response["status"] = "failure"
+                    response["errorMessage"] = e.response['Error']['Message']
+              return response
+      Handler: index.handler
+      Runtime: python3.6
+      Role: !GetAtt IsResourceExistRole.Arn
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    DependsOn: IsResourceExistFunction
+    Properties:
+      LogGroupName: !Join [ "", [ "/aws/lambda/", !Ref IsResourceExistFunction ] ]
+      RetentionInDays: 7
+  TransformFunctionPermissions:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt IsResourceExistFunction.Arn
+      Principal: 'cloudformation.amazonaws.com'
+  Transform:
+    Type: AWS::CloudFormation::Macro
+    Properties:
+      Name: 'isResourceExist'
+      Description: Test if resource exist
+      FunctionName: !GetAtt IsResourceExistFunction.Arn

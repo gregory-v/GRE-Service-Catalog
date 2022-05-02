@@ -1,0 +1,85 @@
+Description: >-
+  Integrate CodeCommit with CodePipeline KMS.
+AWSTemplateFormatVersion: 2010-09-09
+Mappings:
+  Constants:
+    'sandbox':
+      ArnValue: arn:aws:iam::111111111111:root
+    'dev':
+      ArnValue: arn:aws:iam::222222222222:root
+    'qa':
+      ArnValue: arn:aws:iam::333333333333:root
+    'preprod':
+      ArnValue: arn:aws:iam::444444444444:root
+    'prod':
+      ArnValue: arn:aws:iam::555555555555:root
+    'CodePipelineRoleSharedAccount':
+      ArnValue: arn:aws:iam::999999999999:role/CodePipelineRole
+
+
+Resources:
+  KMSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: Used by Assumed Roles in Dev/Test/Prod accounts to Encrypt/Decrypt code
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Id: !Ref AWS::StackName
+        Statement:
+          -
+            Sid: Allows admin of the key
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:role/KmsDeployRole
+            Action:
+              - "kms:Create*"
+              - "kms:Describe*"
+              - "kms:Enable*"
+              - "kms:List*"
+              - "kms:Put*"
+              - "kms:Update*"
+              - "kms:Revoke*"
+              - "kms:Disable*"
+              - "kms:Get*"
+              - "kms:Delete*"
+              - "kms:TagResource"
+              - "kms:UntagResource"
+              - "kms:ScheduleKeyDeletion"
+              - "kms:CancelKeyDeletion"
+            Resource: "*"
+          -
+            Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action:
+              - "kms:*"
+            Resource: "*"
+          -
+            Sid: Allow use of the key for CryptoGraphy Lambda
+            Effect: Allow
+            Principal:
+              AWS:
+                - !FindInMap [ Constants, 'sandbox', ArnValue ]
+                - !FindInMap [ Constants, 'dev', ArnValue ]
+                - !FindInMap [ Constants, 'qa', ArnValue ]
+                - !FindInMap [ Constants, 'preprod', ArnValue ]
+                - !FindInMap [ Constants, 'prod', ArnValue ]
+                - !FindInMap [ Constants, 'CodePipelineRoleSharedAccount', ArnValue ]
+            Action:
+              - "kms:Encrypt"
+              - "kms:Decrypt"
+              - "kms:ReEncrypt*"
+              - "kms:GenerateDataKey*"
+              - "kms:DescribeKey"
+            Resource: "*"
+  KMSAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub alias/codepipeline-crossaccounts
+      TargetKeyId: !Ref KMSKey
+
+Outputs:
+  CMK:
+    Value: !Ref KMSKey

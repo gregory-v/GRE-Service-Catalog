@@ -1,0 +1,275 @@
+Description: >-
+  Integrate CodeCommit with CodePipeline to orchestrate a Service Catalog deployment.
+AWSTemplateFormatVersion: 2010-09-09
+
+Mappings:
+  Constants:
+    'sandbox':
+      ArnValue: arn:aws:iam::111111111111:role/CodePipelineRole
+    'dev':
+      ArnValue: arn:aws:iam::222222222222:role/CodePipelineRole
+    'qa':
+      ArnValue: arn:aws:iam::333333333333:role/CodePipelineRole
+    'preprod':
+      ArnValue: arn:aws:iam::444444444444:role/CodePipelineRole
+    'prod':
+      ArnValue: arn:aws:iam::555555555555:role/CodePipelineRole
+    'shared':
+      ArnValue: arn:aws:iam::999999999999:role/CodePipelineRole
+    'RepositoryBranch':
+      Value: master
+    'RepositoryName':
+      Value: GRE-Service-Catalog
+
+Resources:
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties: 
+      BucketName: !Sub codepipeline-${AWS::Region}-${AWS::AccountId}
+    DeletionPolicy: Retain
+
+  CodePipelineStack:
+    Type: 'AWS::CodePipeline::Pipeline'
+    Properties:
+      RoleArn: !FindInMap [ Constants, 'shared', ArnValue ]
+      Stages:
+        - Name: Source
+          Actions:
+            - InputArtifacts: []
+              Name: Source
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: '1'
+                Provider: CodeCommit
+              OutputArtifacts:
+                - Name: SourceArtifact
+              Configuration:
+                BranchName: !FindInMap [ Constants, 'RepositoryBranch', Value ]
+                RepositoryName: !FindInMap [ Constants, 'RepositoryName', Value ]
+              RunOrder: 1
+        - Name: SharedPortfolio
+          Actions:
+            - InputArtifacts:
+                - Name: SourceArtifact
+              Name: AddProductToPortfolio
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              OutputArtifacts:
+                - Name: StackAOutput
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: !FindInMap [ Constants, 'shared', ArnValue ]
+                StackName: servicecatalog-product-initialization
+                Capabilities: CAPABILITY_IAM
+                TemplatePath: 'SourceArtifact::servicecatalog-product-initialization.yaml'
+                OutputFileName: Output.json
+              RunOrder: 1
+        - Name: DeployProductsVersion
+          Actions:
+            - InputArtifacts:
+                - Name: SourceArtifact
+              Name: DeployPostgreSql
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: ServiceCatalog
+              OutputArtifacts: []
+              Configuration:
+                ConfigurationFilePath: /products/rds/config-rds-postgresql.json
+                ProductId: 
+                  Fn::ImportValue: 'PostgreSQLDatabaseProductID'
+              RunOrder: 1
+            - InputArtifacts:
+                - Name: SourceArtifact
+              Name: DeployMySQL
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: ServiceCatalog
+              OutputArtifacts: []
+              Configuration:
+                ConfigurationFilePath: /products/rds/config-rds-mysql.json
+                ProductId:
+                  Fn::ImportValue: 'MySQLDatabaseProductID'
+              RunOrder: 1
+            - InputArtifacts:
+                - Name: SourceArtifact
+              Name: DeployKMS
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: ServiceCatalog
+              OutputArtifacts: []
+              Configuration:
+                ConfigurationFilePath: /products/kms/config-kms.json
+                ProductId: 
+                  Fn::ImportValue: 'KMSProductID'
+              RunOrder: 1
+            - InputArtifacts:
+                - Name: SourceArtifact
+              Name: DeployS3
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: ServiceCatalog
+              OutputArtifacts: []
+              Configuration:
+                ConfigurationFilePath: /products/s3/config-s3.json
+                ProductId:
+                  Fn::ImportValue: 'S3ProductID'
+              RunOrder: 1
+        - Name: PostDeployProducts
+          Actions:
+            - InputArtifacts:
+                - Name: SourceArtifact
+                - Name: StackAOutput
+              Name: AcceptedPortfolioShareSandbox
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              OutputArtifacts: []
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: !FindInMap [ Constants, 'sandbox', ArnValue ]
+                StackName: servicecatalog-share-portfolio
+                Capabilities: CAPABILITY_IAM
+                TemplatePath: 'SourceArtifact::servicecatalog-share-portfolio.yaml'
+                ParameterOverrides: |
+                  {
+                  "PortfolioID" : { "Fn::GetParam" : ["StackAOutput", "Output.json", "PortfolioID"]}
+                  }
+              RunOrder: 2
+              RoleArn: !FindInMap [ Constants, 'sandbox', ArnValue ]
+            - InputArtifacts:
+                - Name: SourceArtifact
+                - Name: StackAOutput
+              Name: AcceptedPortfolioShareDev
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              OutputArtifacts: []
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: !FindInMap [ Constants, 'dev', ArnValue ]
+                StackName: servicecatalog-share-portfolio
+                Capabilities: CAPABILITY_IAM
+                TemplatePath: 'SourceArtifact::servicecatalog-share-portfolio.yaml'
+                ParameterOverrides: |
+                  {
+                  "PortfolioID" : { "Fn::GetParam" : ["StackAOutput", "Output.json", "PortfolioID"]}
+                  }
+              RunOrder: 2
+              RoleArn: !FindInMap [ Constants, 'dev', ArnValue ]
+            - InputArtifacts:
+                - Name: SourceArtifact
+                - Name: StackAOutput
+              Name: AcceptedPortfolioShareQA
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              OutputArtifacts: []
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: !FindInMap [ Constants, 'qa', ArnValue ]
+                StackName: servicecatalog-share-portfolio
+                Capabilities: CAPABILITY_IAM
+                TemplatePath: 'SourceArtifact::servicecatalog-share-portfolio.yaml'
+                ParameterOverrides: |
+                  {
+                  "PortfolioID" : { "Fn::GetParam" : ["StackAOutput", "Output.json", "PortfolioID"]}
+                  }
+              RunOrder: 2
+              RoleArn: !FindInMap [ Constants, 'qa', ArnValue ]
+            - InputArtifacts:
+                - Name: SourceArtifact
+                - Name: StackAOutput
+              Name: AcceptedPortfolioSharePreprod
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              OutputArtifacts: []
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: !FindInMap [ Constants, 'preprod', ArnValue ]
+                StackName: servicecatalog-share-portfolio
+                Capabilities: CAPABILITY_IAM
+                TemplatePath: 'SourceArtifact::servicecatalog-share-portfolio.yaml'
+                ParameterOverrides: |
+                  {
+                  "PortfolioID" : { "Fn::GetParam" : ["StackAOutput", "Output.json", "PortfolioID"]}
+                  }
+              RunOrder: 2
+              RoleArn: !FindInMap [ Constants, 'preprod', ArnValue ]
+            - InputArtifacts:
+                - Name: SourceArtifact
+                - Name: StackAOutput
+              Name: AcceptedPortfolioShareProd
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: '1'
+                Provider: CloudFormation
+              OutputArtifacts: []
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                RoleArn: !FindInMap [ Constants, 'prod', ArnValue ]
+                StackName: servicecatalog-share-portfolio
+                Capabilities: CAPABILITY_IAM
+                TemplatePath: 'SourceArtifact::servicecatalog-share-portfolio.yaml'
+                ParameterOverrides: |
+                  {
+                  "PortfolioID" : { "Fn::GetParam" : ["StackAOutput", "Output.json", "PortfolioID"]}
+                  }
+              RunOrder: 2
+              RoleArn: !FindInMap [ Constants, 'prod', ArnValue ]
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+        EncryptionKey:
+          Id: alias/codepipeline-crossaccounts
+          Type: KMS
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ArtifactBucket
+      PolicyDocument:
+        Statement:
+          -
+            Action:
+              - 's3:*'
+            Effect: Allow
+            Resource:
+              - !Sub arn:aws:s3:::${ArtifactBucket}
+              - !Sub arn:aws:s3:::${ArtifactBucket}/*
+            Principal:
+              AWS:
+                - !FindInMap [ Constants, 'sandbox', ArnValue ]
+                - !FindInMap [ Constants, 'dev', ArnValue ]
+                - !FindInMap [ Constants, 'qa', ArnValue ]
+                - !FindInMap [ Constants, 'preprod', ArnValue ]
+                - !FindInMap [ Constants, 'prod', ArnValue ]
+Outputs:
+  PipelineUrl:
+    Value: !Join 
+      - ''
+      - - 'https://console.aws.amazon.com/codepipeline/home?region='
+        - !Ref 'AWS::Region'
+        - '#/view/'
+        - !Ref CodePipelineStack
+    Description: Pipeline Url

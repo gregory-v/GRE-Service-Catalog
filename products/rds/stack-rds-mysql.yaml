@@ -1,0 +1,247 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: GRE / Deploy an Amazon RDS database instance
+Parameters:
+  ApplicationName:
+    Description: The name of application
+    Type: String
+    AllowedPattern: '[a-z0-9\-]*'
+    ConstraintDescription: Can contain only lower letters, numbers and hyphens.
+    MinLength: 1
+  EnvironmentName:
+    Description: The name of application
+    Type: String
+    Default: i1
+    AllowedPattern: '[a-z0-9\-]*'
+    ConstraintDescription: Can contain only lower letters, numbers and hyphens.
+    MinLength: 1
+  AccountAlias:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: '/account/alias'
+    AllowedValues:
+      - '/account/alias'
+    Description: Do not change this parameter.
+  DatabaseEngineVersion:
+    Description: The version of the database engine for MySQL
+    Type: String
+    Default: "5.7.22"
+    AllowedValues:
+      - "5.7.22"
+      - "8.0.15"
+      - "8.0.11"
+      - "8.0.13"
+    ConstraintDescription: must select a valid major engine version
+  DBClass:
+    Description: Database instance class
+    Type: String
+    Default: db.t3.micro
+    AllowedValues:
+      - db.m4.xlarge
+      - db.r3.large
+      - db.r3.xlarge
+      - db.t3.micro
+      - db.t3.small
+      - db.t3.medium
+      - db.t3.large
+    ConstraintDescription: must select a valid database instance type.
+  DBName:
+    Default: mydb
+    Description: The new database name or The name of a database restored if snapshot name is completed
+    Type: String
+    MinLength: '1'
+    MaxLength: '64'
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+    ConstraintDescription: must begin with a letter and contain only alphanumeric characters.
+  DBSnapshotName:
+    Description: The name of a DB snapshot (optional)
+    Default: ""
+    Type: String
+    ConstraintDescription: must be either true or false.
+  DBAllocatedStorage:
+    Default: '5'
+    Description: The size of the database (Gb)
+    Type: Number
+    MinValue: '5'
+    MaxValue: '1024'
+    ConstraintDescription: must be between 5 and 1024Gb.
+  DnsName:
+    Description: The Dns Name of rds
+    Type: String
+    AllowedPattern: '[a-z0-9\-]*'
+
+Mappings:
+  ParameterGroupMap:
+    '5.7.22':
+      family: mysql5.7
+    '8.0.15':
+      family: mysql8.0
+    '8.0.11':
+      family: mysql8.0
+    '8.0.13':
+      family: mysql8.0
+  #Alias Transform by Macro GetKmsIdFromKmsAlias
+  ParameterKmsKeyId:
+    'sandbox':
+      KmsKeyAlias: alias/gre/rds/global/sandbox
+    'dev':
+      KmsKeyAlias: alias/gre/rds/global/dev
+    'qa':
+      KmsKeyAlias: alias/gre/rds/global/qa
+    'preprod':
+      KmsKeyAlias: alias/gre/rds/global/preprod
+    'prod':
+      KmsKeyAlias: alias/gre/rds/global/prod
+
+Conditions:
+  UseDBSnapshot: !Not [!Equals [!Ref DBSnapshotName, ""]]
+  IsMultiAZ: !Equals [!Ref AccountAlias, "prod"]
+Resources:
+  #This is a Secret resource with a randomly generated password in its SecretString JSON.
+  MyRDSInstanceRotationSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: !Sub 'This is my ${DBName} instance secret'
+      Name: !Join
+        - ''
+        - - '/'
+          - !Ref EnvironmentName
+          - '/'
+          - 'databases'
+          - '/'
+          - !Ref DBName
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "Admininistrateur"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 16
+        ExcludePunctuation: true
+
+  DBEC2SecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Open database for access
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '3306'
+          ToPort: '3306'
+          CidrIp: 
+            Fn::ImportValue: 
+              !Sub "gre-${AccountAlias}-vpc-VpcCidr"
+      VpcId:
+        Fn::ImportValue:
+          !Sub "gre-${AccountAlias}-vpc-Vpcid"
+  DBInstance:
+    Type: 'AWS::RDS::DBInstance'
+    DeletionPolicy: Snapshot
+    Properties:
+      DBName: !If [UseDBSnapshot, !Ref "AWS::NoValue", !Ref DBName ]
+      DBSnapshotIdentifier: !If [UseDBSnapshot, !Ref DBSnapshotName, !Ref "AWS::NoValue"]
+      DBInstanceIdentifier: !Sub ${ApplicationName}-${EnvironmentName}-${DBName}
+      CopyTagsToSnapshot: true
+      Engine: mysql
+      #KmsKeyId Transform by MacroGetKmsIdFromKmsAlias
+      KmsKeyId: "%s"
+      StorageEncrypted: true
+      StorageType: gp2
+      MaxAllocatedStorage: 100
+      EngineVersion: !Ref DatabaseEngineVersion
+      MultiAZ: !If
+        - IsMultiAZ
+        - 'true'
+        - 'false'
+      MasterUsername: !Join ['', ['{{resolve:secretsmanager:', !Ref MyRDSInstanceRotationSecret, ':SecretString:username}}' ]]
+      MasterUserPassword: !Join ['', ['{{resolve:secretsmanager:', !Ref MyRDSInstanceRotationSecret, ':SecretString:password}}' ]]
+      DBInstanceClass: !Ref DBClass
+      AllocatedStorage: !Ref DBAllocatedStorage
+      AutoMinorVersionUpgrade : false
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      AllowMajorVersionUpgrade: true
+      BackupRetentionPeriod: 7
+      DBParameterGroupName: !Ref RDSDBParameterGroup
+      VPCSecurityGroups:
+        - !GetAtt
+          - DBEC2SecurityGroup
+          - GroupId
+            
+  #This is a SecretTargetAttachment resource which updates the referenced Secret resource with properties about
+  #the referenced RDS instance
+  SecretRDSInstanceAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref MyRDSInstanceRotationSecret
+      TargetId: !Ref DBInstance
+      TargetType: AWS::RDS::DBInstance
+      
+  RDSDBParameterGroup:
+    Type: 'AWS::RDS::DBParameterGroup'
+    Properties:
+      Description: !Join 
+        - ' '
+        - - MySQL
+          - !Ref DatabaseEngineVersion
+          - >-
+            Parameter group with replication configuration and 2 phase commit
+            support
+      Family: !FindInMap 
+        - ParameterGroupMap
+        - !Ref DatabaseEngineVersion
+        - family
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - '-'
+            - - GRE-Default
+              - !Ref DatabaseEngineVersion
+        
+  RDSSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupDescription: RDS subnet group
+      SubnetIds:
+        - Fn::ImportValue:
+            !Sub "gre-${AccountAlias}-vpc-DbSubnetAZaid"
+        - Fn::ImportValue:
+            !Sub "gre-${AccountAlias}-vpc-DbSubnetAZbid"
+        - Fn::ImportValue:
+            !Sub "gre-${AccountAlias}-vpc-DbSubnetAZcid"
+            
+  RecordSet:
+    Type: 'AWS::Route53::RecordSetGroup'
+    Properties:
+      Comment: !Sub "Proxy alias for DBName"
+      HostedZoneId:
+        Fn::ImportValue: 'gre-hostedZoneId'
+      RecordSets:
+        - Name: !Join
+            - ''
+            - - !Sub "${DnsName}"
+              - '.'
+              - Fn::ImportValue:
+                  'gre-hostedZoneName'
+              - '.'
+          Type: CNAME
+          TTL: '900'
+          ResourceRecords:
+            - !GetAtt [DBInstance,Endpoint.Address]
+Transform:
+  - GetKmsIdFromKmsAlias
+
+Outputs:
+  DBInstanceIdentifier:
+    Value: !Sub ${ApplicationName}-${EnvironmentName}-${DBName}
+    Description: Database identifier
+  DBEndpointAddress:
+    Value: !GetAtt
+      - DBInstance
+      - Endpoint.Address
+    Description: Database Address
+  DBEndpointPort:
+    Value: !GetAtt
+      - DBInstance
+      - Endpoint.Port
+  DBEndpointAlias:
+    Value: !Join
+      - ''
+      - - !Sub "${DnsName}"
+        - '.'
+        - Fn::ImportValue:
+            'gre-hostedZoneName'
+    Description: Database Alias

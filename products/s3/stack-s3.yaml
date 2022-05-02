@@ -1,0 +1,144 @@
+Description: This template create a bucket and allow access cross account
+AWSTemplateFormatVersion: '2010-09-09'
+
+Parameters:
+  BucketName:
+    Description: The name of bucket
+    Type: String
+    AllowedPattern: '[\x20-\x7E]*'
+    ConstraintDescription: Can contain only ASCII characters.
+  AccountAlias:
+    Type: AWS::SSM::Parameter::Value<String>
+    Default: '/account/alias'
+    AllowedValues:
+      - '/account/alias'
+    Description: Do not change this parameter.
+  ApplicationName:
+    Description: The name of application
+    Type: String
+    AllowedPattern: '[a-z0-9\-]*'
+    ConstraintDescription: Can contain only lower letters, numbers and hyphens.
+    MinLength: 1
+  EnvironmentName:
+    Description: The name of environment
+    Type: String
+    AllowedPattern: '[a-z0-9\-]*'
+    ConstraintDescription: Can contain only lower letters, numbers and hyphens.
+    MinLength: 1
+  QueueNotification:
+    Description: The Queue Notification (optional)
+    Type: String
+    AllowedPattern: '[\x20-\x7E]*'
+    ConstraintDescription: Can contain only ASCII characters.
+  Private:
+    Description: Set only if you need a private bucket
+    Default: 'false'
+    Type: String
+
+
+Conditions:
+  UseQueueNotification: !Not [!Equals [!Ref QueueNotification, ""]]
+  IsPrivate: !Equals [!Ref Private, "true"]
+
+## Uppercase require macro Fn::Transform we are using Mappings instead
+Mappings:
+  Constants:
+    'sandbox':
+      ArnADFSAdmin: arn:aws:iam::111111111111:role/ADFS_GRE_SANDBOX_ADMINS
+      ArnADFSPowerusers : arn:aws:iam::111111111111:role/ADFS_GRE_SANDBOX_POWERUSERS
+    'dev':
+      ArnADFSAdmin: arn:aws:iam::222222222222:role/ADFS_GRE_DEV_ADMINS
+      ArnADFSPowerusers: arn:aws:iam::222222222222:role/ADFS_GRE_DEV_POWERUSERS
+    'qa':
+      ArnADFSAdmin: arn:aws:iam::333333333333:role/ADFS_GRE_QA_ADMINS
+      ArnADFSPowerusers: arn:aws:iam::333333333333:role/ADFS_QA_SANDBOX_POWERUSERS
+    'preprod':
+      ArnADFSAdmin: arn:aws:iam::444444444444:role/ADFS_GRE_PREPROD_ADMINS
+      ArnADFSPowerusers: arn:aws:iam::444444444444:role/ADFS_GRE_PREPROD_POWERUSERS
+    'prod':
+      ArnADFSAdmin: arn:aws:iam::555555555555:role/ADFS_GRE_PROD_ADMINS
+      ArnADFSPowerusers: arn:aws:iam::555555555555:role/ADFS_GRE_PROD_POWERUSERS
+
+Resources:
+  S3Bucket:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Join [ '-' , [ !Ref BucketName, 'gre', !Ref EnvironmentName, !Ref "AWS::Region" ] ]
+      AccessControl: Private
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          -
+            ServerSideEncryptionByDefault:
+              SSEAlgorithm: aws:kms
+              KMSMasterKeyID:
+                'Fn::Transform':
+                  - Name: 'GetKMSIdFromKmsAlias'
+                    Parameters:
+                      KmsKeyAlias: !Join
+                        - ''
+                        - - !Sub 'alias/gre/s3/'
+                          - !Ref ApplicationName
+                          - '/'
+                          - !Ref AccountAlias
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: True
+        BlockPublicPolicy: True
+        IgnorePublicAcls: True
+        RestrictPublicBuckets: True
+      NotificationConfiguration:
+        !If
+          - UseQueueNotification
+          - QueueConfigurations:
+                - Event: s3:ObjectCreated:*
+                  Queue: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${QueueNotification}
+                - Event: s3:ObjectRemoved:*
+                  Queue: !Sub arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:${QueueNotification}
+          - !Ref "AWS::NoValue"
+  PrivateBucketPolicy:
+    Condition: IsPrivate
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket:
+        Ref: S3Bucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 's3:*'
+            Effect: Deny
+            Resource:
+              - !Join
+                - ''
+                - - 'arn:aws:s3:::'
+                  - Ref: S3Bucket
+                  - /*
+              - !Join
+                    - ''
+                    - - 'arn:aws:s3:::'
+                      - Ref: S3Bucket
+            Principal: '*'
+            Condition:
+              StringNotLike:
+                'aws:PrincipalArn':
+                  #Role V2
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/${ApplicationName}-${EnvironmentName}-AppInstanceRole-*
+                  #Role V3 AWS & User V3 DFI
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/${ApplicationName}-${EnvironmentName}*
+                  #Role deployment V2
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/gre-${AccountAlias}-jenkins-iam-GREJenkinsRole-*
+                  #Roles Admin
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/gre-admins
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/gre-powerusers
+                  - !FindInMap [ Constants, !Ref AccountAlias, ArnADFSAdmin ]
+                  - !FindInMap [ Constants, !Ref AccountAlias, ArnADFSPowerusers ]
+                  #Role deployment V3
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/${AccountAlias}_deployer_role
+                  - !Sub arn:aws:iam::${AWS::AccountId}:role/S3LaunchConstraintRole
+Outputs:
+  bucketArn:
+    Value: !GetAtt [S3Bucket, Arn]
+  bucketID:
+    Value: !Ref S3Bucket

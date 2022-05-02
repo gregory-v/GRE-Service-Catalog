@@ -1,0 +1,393 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Queue SQS qui recevoient les évènements du bucket S3 d'une application
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: elements de l'application
+        Parameters:
+          - ApplicationName
+          - EnvironmentName
+      - Label:
+          default: elements de l'infrastructure
+        Parameters:
+          - S3AccessCidrBlocks
+          - VpcCidr
+          - VpcId
+          - AuthorizedApplicationName
+          - AuthorizedApplicationEnvironmentName
+Parameters:
+  ApplicationName:
+    Description: nom de l'application
+    Type: String
+  EnvironmentName:
+    Description: code environnement de l'application
+    Type: String
+  S3AccessCidrBlocks:
+    Description: blocs CDIR des accès autorisés exterieurs au VPC
+    Type: CommaDelimitedList
+    ConstraintDescription: blocs CDIR des sous réseaux autorisés
+  VpcCidr:
+    AllowedPattern: '\d{1,3}+\.\d{1,3}+\.\d{1,3}+\.\d{1,3}/\d{1,2}'
+    ConstraintDescription: Must be valid CIDR form xx.xx.xx.xx/xx
+    Description: bloc CIDR du VPC de l'application
+    MaxLength: 18
+    MinLength: 1
+    Type: String
+  VpcId:
+    Description: idenfifiant du VPC de l'application
+    Type: 'AWS::EC2::VPC::Id'
+    ConstraintDescription: 'ID d''un VPC (vpc-a123baa3, par exemple)'
+  AuthorizedApplicationName:
+      Description: Nom de l'application pop autorisée à accéder au bucket
+      Type: String
+  AuthorizedApplicationEnvironmentName:
+      Description: Code environnement de l'application pop autorisée à accéder au bucket
+      Type: String
+Resources:
+  NotificationDeadLetterQueue:
+    Type: 'AWS::SQS::Queue'
+    Properties:
+      QueueName: !Sub '${ApplicationName}-${EnvironmentName}-notification-failure'
+      MessageRetentionPeriod: '1209600'
+  NotificationStandardQueue:
+    Type: 'AWS::SQS::Queue'
+    Properties:
+      QueueName: !Sub '${ApplicationName}-${EnvironmentName}-notification-standard'
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt
+          - NotificationDeadLetterQueue
+          - Arn
+        maxReceiveCount: 10
+  NotificationStandardQueuePolicy:
+    Type: 'AWS::SQS::QueuePolicy'
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: '*'
+            Action:
+              - 'sqs:SendMessage'
+            Resource: !GetAtt
+              - NotificationStandardQueue
+              - Arn
+      Queues:
+        - !Ref NotificationStandardQueue
+  ApplicationUser:
+    DependsOn:
+      - S3ExternalAppWritePolicy
+      - AmazonS3AndKmsFullAccess
+    Description: >-
+      Utilisateur de l'application AuthorizedApplicationName pour accès au
+      bucket d'échange de ApplicationName
+    Type: 'AWS::IAM::User'
+    Properties:
+      UserName: !Sub >-
+        ${AuthorizedApplicationName}-${AuthorizedApplicationEnvironmentName}-s3-access-for-${ApplicationName}-${EnvironmentName}
+      ManagedPolicyArns: !Ref S3ExternalAppWritePolicy
+      PermissionsBoundary: !Ref AmazonS3AndKmsFullAccess
+  ApplicationUserAccessKey:
+    Type: 'AWS::IAM::AccessKey'
+    Properties:
+      UserName: !Ref ApplicationUser
+
+  NotificationStandardQueueAppInstancePolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: !Sub >-
+        ${ApplicationName}-${EnvironmentName}-NotificationStandardQueueAppInstancePolicy
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'sqs:GetQueueUrl'
+              - 'sqs:GetQueueAttributes'
+              - 'sqs:ReceiveMessage'
+              - 'sqs:SendMessage'
+              - 'sqs:DeleteMessage'
+            Resource: !GetAtt
+              - NotificationStandardQueue
+              - Arn
+      Roles:
+        - !ImportValue
+          'Fn::Sub': '${ApplicationName}-${EnvironmentName}-AppInstanceRole'
+  S3AppEchangeEncryptionKey:
+    Type: 'AWS::KMS::Key'
+    Properties:
+      Description: !Sub >-
+        chiffrement du bucket
+        ${ApplicationName}-gre-echange-${EnvironmentName}-${AWS::Region}
+      EnableKeyRotation: true
+      KeyPolicy:
+        Id: key-consolepolicy-3
+        Version: 2012-10-17
+        Statement:
+          - Sid: Enable IAM User Permissions
+            Effect: Allow
+            Principal:
+              AWS:
+                - 'arn:aws:iam::999999999999:root'
+                - 'arn:aws:iam::111111111111:root'
+            Action: 'kms:*'
+            Resource: '*'
+          - Sid: Allow access for Key Administrators
+            Effect: Allow
+            Principal:
+              AWS:
+                - 'arn:aws:iam::111111111111:role/ADFS_GRE_SANDBOX_ADMINS'
+                - 'arn:aws:iam::111111111111:role/gre-admins'
+                - 'arn:aws:iam::111111111111:role/ADFS-GRE-Sandbox-Admin'
+            Action:
+              - 'kms:Create*'
+              - 'kms:Describe*'
+              - 'kms:Enable*'
+              - 'kms:List*'
+              - 'kms:Put*'
+              - 'kms:Update*'
+              - 'kms:Revoke*'
+              - 'kms:Disable*'
+              - 'kms:Get*'
+              - 'kms:Delete*'
+              - 'kms:TagResource'
+              - 'kms:UntagResource'
+              - 'kms:ScheduleKeyDeletion'
+              - 'kms:CancelKeyDeletion'
+            Resource: '*'
+          - Sid: Allow use of the key
+            Effect: Allow
+            Principal:
+              AWS:
+                - 'arn:aws:iam::111111111111:role/gre-powerusers'
+                - 'arn:aws:iam::111111111111:role/ADFS_GRE_SANDBOX_POWERUSERS'
+            Action:
+              - 'kms:Encrypt'
+              - 'kms:Decrypt'
+              - 'kms:ReEncrypt*'
+              - 'kms:GenerateDataKey*'
+              - 'kms:DescribeKey'
+            Resource: '*'
+          - Sid: Allow attachment of persistent resources
+            Effect: Allow
+            Principal:
+              AWS:
+                - 'arn:aws:iam::111111111111:role/gre-powerusers'
+                - 'arn:aws:iam::111111111111:role/ADFS_GRE_SANDBOX_POWERUSERS'
+            Action:
+              - 'kms:CreateGrant'
+              - 'kms:ListGrants'
+              - 'kms:RevokeGrant'
+            Resource: '*'
+            Condition:
+              Bool:
+                'kms:GrantIsForAWSResource': 'true'
+  S3AppEchangeBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub '${ApplicationName}-gre-echange-${EnvironmentName}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              KMSMasterKeyID: !Ref S3AppEchangeEncryptionKey
+              SSEAlgorithm: 'aws:kms'
+      VersioningConfiguration:
+        Status: Enabled
+      NotificationConfiguration:
+        QueueConfigurations:
+          - Event: 's3:ObjectCreated:*'
+            Queue: !GetAtt
+              - NotificationStandardQueue
+              - Arn
+  S3AppEchangeBucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref S3AppEchangeBucket
+      PolicyDocument:
+        Statement:
+          - Sid: AllAccessForAdministrationRoles
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/ADFS_GRE_SANDBOX_ADMINS'
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/gre-admins'
+                - !Sub >-
+                  arn:aws:iam::${AWS::AccountId}:role/ADFS_GRE_SANDBOX_POWERUSERS
+                - !Sub 'arn:aws:iam::${AWS::AccountId}:role/gre-powerusers'
+            Action: 's3:*'
+            Resource:
+              - !Sub 'arn:aws:s3:::${S3AppEchangeBucket}'
+              - !Sub 'arn:aws:s3:::${S3AppEchangeBucket}/*'
+          - Sid: AccessRestrictedBySource
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !Sub 'arn:aws:s3:::${S3AppEchangeBucket}'
+              - !Sub 'arn:aws:s3:::${S3AppEchangeBucket}/*'
+            Condition:
+              NotIpAddress:
+                'aws:SourceIp': !Join
+                  - ','
+                  - - !Join
+                      - ','
+                      - !Ref S3AccessCidrBlocks
+                    - !Ref VpcCidr
+              'ForAllValues:StringNotEquals':
+                'aws:sourceVpc': !Ref VpcId
+                'aws:CalledViaFirst': cloudformation.amazonaws.com
+  S3AppEchangeInstancePolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: !Sub '${ApplicationName}-${EnvironmentName}-S3AppEchangeInstancePolicy'
+      PolicyDocument:
+        Statement:
+          - Action:
+              - 's3:GetObject'
+              - 's3:PutObject'
+              - 's3:DeleteObject'
+            Effect: Allow
+            Resource:
+              - !Sub 'arn:aws:s3:::${S3AppEchangeBucket}'
+              - !Sub 'arn:aws:s3:::${S3AppEchangeBucket}/*'
+      Roles:
+        - !ImportValue
+          'Fn::Sub': '${ApplicationName}-${EnvironmentName}-AppInstanceRole'
+  S3AppEchangeDBS3ImportPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: !Sub '${ApplicationName}-${EnvironmentName}-S3AppEchangeDBImportPolicy'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: s3Import
+            Action:
+              - 's3:GetObject'
+              - 's3:ListBucket'
+            Effect: Allow
+            Resource:
+              - !Sub 'arn:aws:s3:::${S3AppEchangeBucket}'
+              - !Sub 'arn:aws:s3:::${S3AppEchangeBucket}/*'
+          - Sid: AllowDecryptForS3AppEchangeEncryptionKeyArn
+            Effect: Allow
+            Action:
+              - 'kms:Decrypt'
+            Resource:
+              - !GetAtt
+                - S3AppEchangeEncryptionKey
+                - Arn
+      Roles:
+        - !ImportValue
+          'Fn::Sub': '${ApplicationName}-${EnvironmentName}-DBRole'
+  S3ExternalAppWritePolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Sub 'write-bucket-${S3AppEchangeBucket}'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowPutObjectForS3AppEchangeBucketName
+            Effect: Allow
+            Action: 's3:PutObject'
+            Resource:
+              - !Sub 'arn:aws:s3:::${S3AppEchangeBucket}'
+              - !Sub 'arn:aws:s3:::${S3AppEchangeBucket}/*'
+          - Sid: AllowEncryptionForS3AppEchangeEncryptionKeyArn
+            Effect: Allow
+            Action:
+              - 'kms:Encrypt'
+              - 'kms:ReEncrypt*'
+              - 'kms:GenerateDataKey*'
+            Resource:
+              - !GetAtt
+                - S3AppEchangeEncryptionKey
+                - Arn
+  S3ExternalAppReadPolicy:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Sub 'read-bucket-${S3AppEchangeBucket}'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: AllowReadForS3AppEchangeBucketName
+            Effect: Allow
+            Action: 's3:GetObject'
+            Resource:
+              - !Sub 'arn:aws:s3:::${S3AppEchangeBucket}'
+              - !Sub 'arn:aws:s3:::${S3AppEchangeBucket}/*'
+          - Sid: AllowDecryptForS3AppEchangeEncryptionKeyArn
+            Effect: Allow
+            Action:
+              - 'kms:Decrypt'
+            Resource:
+              - !GetAtt
+                - S3AppEchangeEncryptionKey
+                - Arn
+  AmazonS3AndKmsFullAccess:
+    Type: 'AWS::IAM::ManagedPolicy'
+    Properties:
+      ManagedPolicyName: !Sub AmazonS3AndKmsFullAccess
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - 's3:*'
+              - 'kms:*'
+            Resource: '*'
+Outputs:
+  NotificationDeadLetterQueueURL:
+    Description: URL de la DLQ
+    Value: !Ref NotificationDeadLetterQueue
+    Export:
+      Name: !Sub '${ApplicationName}-${EnvironmentName}-NotificationDeadLetterQueueURL'
+  NotificationDeadLetterQueueARN:
+    Description: ARN de la DLQ
+    Value: !GetAtt
+      - NotificationDeadLetterQueue
+      - Arn
+    Export:
+      Name: !Sub '${ApplicationName}-${EnvironmentName}-NotificationDeadLetterQueueARN'
+  NotificationDeadLetterQueueName:
+    Description: Nom de la DLQ
+    Value: !GetAtt
+      - NotificationDeadLetterQueue
+      - QueueName
+    Export:
+      Name: !Sub '${ApplicationName}-${EnvironmentName}-NotificationDeadLetterQueueName'
+  NotificationStandardQueueURL:
+    Description: URL de la queue standard
+    Value: !Ref NotificationStandardQueue
+    Export:
+      Name: !Sub '${ApplicationName}-${EnvironmentName}-NotificationStandardQueueURL'
+  NotificationStandardQueueARN:
+    Description: ARN de la queue standard
+    Value: !GetAtt
+      - NotificationStandardQueue
+      - Arn
+    Export:
+      Name: !Sub '${ApplicationName}-${EnvironmentName}-NotificationStandardQueueARN'
+  NotificationStandardQueueName:
+    Description: nom de la queue standard
+    Value: !GetAtt
+      - NotificationStandardQueue
+      - QueueName
+    Export:
+      Name: !Sub '${ApplicationName}-${EnvironmentName}-NotificationStandardQueueName'
+  S3AppEchangeBucketName:
+    Description: The application S3 bucket for exchanges
+    Value: !Ref S3AppEchangeBucket
+    Export:
+      Name: !Sub '${ApplicationName}-${EnvironmentName}-S3AppEchangeBucketName'
+  S3AppEchangeEncryptionKeyArn:
+    Description: The application S3 bucket encryption key ARN
+    Value: !GetAtt
+      - S3AppEchangeEncryptionKey
+      - Arn
+    Export:
+      Name: !Sub '${ApplicationName}-${EnvironmentName}-S3AppEchangeEncryptionKeyArn'
+  S3ExternalAppReadPolicy:
+    Description: Policy for permissions to read from the S3 bucket
+    Value: !Ref S3ExternalAppReadPolicy
+    Export:
+      Name: !Sub '${ApplicationName}-${EnvironmentName}-S3ExternalAppReadPolicy'

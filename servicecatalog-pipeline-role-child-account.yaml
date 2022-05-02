@@ -1,0 +1,105 @@
+Description: >-
+  Integrate CodeCommit with CodePipeline to orchestrate a CodeDeploy deployment.
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  KMSCrossAccount:
+    Description: KMS for pipeline cross-account
+    Type: String
+
+Resources:
+  CodePipelineRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: CodePipelineRole
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: 'arn:aws:iam::999999999999:root'
+              Service:
+                - codepipeline.amazonaws.com
+                - cloudformation.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: codepipeline-service
+          PolicyDocument:
+            Statement:
+              - Action:
+                  - 'opsworks:DescribeStacks'
+                  - 'rds:*'
+                  - 'devicefarm:GetRun'
+                  - 'cloudformation:CreateChangeSet'
+                  - 'autoscaling:*'
+                  - 'codebuild:BatchGetBuilds'
+                  - 'servicecatalog:ListProvisioningArtifacts'
+                  - 'devicefarm:ScheduleRun'
+                  - 'devicefarm:ListDevicePools'
+                  - 'cloudformation:UpdateStack'
+                  - 'servicecatalog:DescribeProvisioningArtifact'
+                  - 'cloudformation:DescribeChangeSet'
+                  - 'cloudformation:ExecuteChangeSet'
+                  - 'devicefarm:ListProjects'
+                  - 'sns:*'
+                  - 'lambda:ListFunctions'
+                  - 'lambda:InvokeFunction'
+                  - 'codedeploy:RegisterApplicationRevision'
+                  - 'opsworks:DescribeDeployments'
+                  - 'devicefarm:CreateUpload'
+                  - 'cloudformation:*'
+                  - 'cloudformation:DescribeStacks'
+                  - 'codecommit:GetUploadArchiveStatus'
+                  - 'cloudwatch:*'
+                  - 'opsworks:DescribeInstances'
+                  - 'cloudformation:DeleteStack'
+                  - 'ecs:*'
+                  - 'ecr:DescribeImages'
+                  - 'ec2:*'
+                  - 'servicecatalog:*'
+                  - 'codebuild:StartBuild'
+                  - 'opsworks:DescribeApps'
+                  - 'opsworks:UpdateStack'
+                  - 'cloudformation:ValidateTemplate'
+                  - 'codedeploy:CreateDeployment'
+                  - 'codedeploy:GetApplicationRevision'
+                  - 'codedeploy:GetDeploymentConfig'
+                  - 'servicecatalog:CreateProvisioningArtifact'
+                  - 'sqs:*'
+                  - 'cloudformation:DeleteChangeSet'
+                  - 'iam:PassRole'
+                  - 'codecommit:GetCommit'
+                  - 'servicecatalog:DeleteProvisioningArtifact'
+                  - 'codedeploy:GetApplication'
+                  - 'cloudformation:SetStackPolicy'
+                  - 'codecommit:UploadArchive'
+                  - 's3:*'
+                  - 'elasticloadbalancing:*'
+                  - 'codecommit:CancelUploadArchive'
+                  - 'devicefarm:GetUpload'
+                  - 'elasticbeanstalk:*'
+                  - 'opsworks:UpdateApp'
+                  - 'opsworks:CreateDeployment'
+                  - 'cloudformation:CreateStack'
+                  - 'servicecatalog:UpdateProduct'
+                  - 'codecommit:GetBranch'
+                  - 'codedeploy:GetDeployment'
+                  - 'opsworks:DescribeCommands'
+                  - 'iam:CreateRole'
+                  - 'iam:DeleteRole'
+                  - 'iam:DeleteRolePolicy'
+                  - 'iam:PutRolePolicy'
+                  - 'iam:GetRole'
+                  - 'iam:DetachRolePolicy'
+                  - 'iam:AttachRolePolicy'
+                  - 'iam:GetRolePolicy'
+                  - 'iam:DetachRolePolicy'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 'iam:GetRole'
+                  - 'kms:Decrypt'
+                Resource:
+                  - 'arn:aws:iam::*:role/gre-admins'
+                  - !Sub arn:aws:kms:eu-west-3:999999999999:key/${KMSCrossAccount}
+                Effect: Allow

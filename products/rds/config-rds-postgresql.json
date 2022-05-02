@@ -1,0 +1,9 @@
+{
+    "SchemaVersion": "1.0",
+    "ProductVersionName": "1.10",
+    "ProductVersionDescription": "1.10 version",
+    "ProductType": "CLOUD_FORMATION_TEMPLATE",
+    "Properties": {
+        "TemplateFilePath": "/products/rds/stack-rds-postgresql.yaml"
+    }
+}

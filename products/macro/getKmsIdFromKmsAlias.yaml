@@ -1,0 +1,88 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "CloudFormation Macro for Get KmsId From KmsAlias"
+Resources:
+  TransformExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: MacroRoleGetKms
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com]
+            Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: ['logs:*']
+                Resource: 'arn:aws:logs:*:*:*'
+        - PolicyName: cross-account-kms
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: ['sts:AssumeRole']
+                Resource: 'arn:aws:iam::999999999999:role/KmsDeployRole'
+  TransformFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: |
+          import traceback
+          import boto3
+          import json
+          from botocore.exceptions import ClientError
+          def handler(event, context):
+              print(json.dumps(event))
+              sts = boto3.client('sts')
+              assumedRoleObject = sts.assume_role(
+                RoleArn='arn:aws:iam::999999999999:role/KmsDeployRole',
+                RoleSessionName='session' + "999999999999",
+              )
+              credentials = assumedRoleObject['Credentials']
+              client = boto3.client(
+              'kms',
+              aws_access_key_id = credentials['AccessKeyId'],
+              aws_secret_access_key = credentials['SecretAccessKey'],
+              aws_session_token = credentials['SessionToken'],
+              )
+
+              response = {
+                  "requestId": event["requestId"],
+                  "status": "success"
+              }
+              try:
+                  input = event["params"]["KmsKeyAlias"]
+                  response_client_kms = client.describe_key(KeyId=input)
+                  response["fragment"] = response_client_kms["KeyMetadata"]["Arn"]
+              except ClientError as e:
+                  traceback.print_exc()
+                  response["status"] = "failure"
+                  response["errorMessage"] = e.response['Error']['Message']
+              return response
+      Handler: index.handler
+      Runtime: python3.6
+      Role: !GetAtt TransformExecutionRole.Arn
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    DependsOn: TransformFunction
+    Properties:
+      LogGroupName: !Join [ "", [ "/aws/lambda/", !Ref TransformFunction ] ]
+      RetentionInDays: 7
+  TransformFunctionPermissions:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt TransformFunction.Arn
+      Principal: 'cloudformation.amazonaws.com'
+  Transform:
+    Type: AWS::CloudFormation::Macro
+    Properties:
+      Name: 'GetKMSIdFromKmsAlias'
+      Description: Provides various string processing functions
+      FunctionName: !GetAtt TransformFunction.Arn

@@ -1,0 +1,268 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: This template creates a portfolio that contains Amazon products with constraints and shares it with an AWS IAM group.
+Mappings:
+  Constants:
+    'gre-prod-admins-grp':
+      ArnValue: arn:aws:iam::999999999999:group/gre-prod-admins-grp
+    'sandbox':
+      AccountId: 111111111111
+    'dev':
+      AccountId: 222222222222
+    'qa':
+      AccountId: 333333333333
+    'preprod':
+      AccountId: 444444444444
+    'prod':
+      AccountId: 555555555555
+    'shared':
+      AccountId: 999999999999
+
+
+Resources:
+  Portfolio:
+    Type: "AWS::ServiceCatalog::Portfolio"
+    Properties:
+      Description: "A portfolio of self-service."
+      DisplayName: "GRE Portfolio"
+      ProviderName: "GRE"
+
+  PortfolioPrincipalAssociation:
+    Type: "AWS::ServiceCatalog::PortfolioPrincipalAssociation"
+    Properties:
+      PortfolioId: !Ref Portfolio
+      PrincipalARN: !FindInMap
+        - Constants
+        - 'gre-prod-admins-grp'
+        - ArnValue
+      PrincipalType: "IAM"
+
+  PostgreSQLDatabaseProduct:
+    Type: "AWS::ServiceCatalog::CloudFormationProduct"
+    Properties:
+      Name: "PostgreSQL Database"
+      Description: "PostgreSQL Database with corporate configuration."
+      Distributor: "GRE"
+      Owner: "plateforms-services"
+      SupportDescription: "Please call any time for support"
+      SupportEmail: "dtd-platforms@gre-group.com"
+      SupportUrl: "https://www.example.com"
+      ProvisioningArtifactParameters:
+        -
+          Name: "PostgreSQL Database"
+          Description: "PostgreSQL Database"
+          Info:
+            LoadTemplateFromURL: "https://gre-shared-service-catalog.s3.eu-west-3.amazonaws.com/empty-stack.yaml"
+
+  MySQLDatabaseProduct:
+    Type: "AWS::ServiceCatalog::CloudFormationProduct"
+    Properties:
+      Name: "MySQL Database"
+      Description: "MySQL Database with corporate configuration."
+      Distributor: "GRE"
+      Owner: "plateforms-services"
+      SupportDescription: "Please call any time for support"
+      SupportEmail: "dtd-platforms@gre-group.com"
+      SupportUrl: "https://www.example.com"
+      ProvisioningArtifactParameters:
+        -
+          Name: "MySQL Database"
+          Description: "MySQL Database"
+          Info:
+            LoadTemplateFromURL: "https://gre-shared-service-catalog.s3.eu-west-3.amazonaws.com/empty-stack.yaml"
+
+  KMSProduct:
+    Type: "AWS::ServiceCatalog::CloudFormationProduct"
+    Properties:
+      Name: "KMS"
+      Description: "KMS with corporate configuration."
+      Distributor: "GRE"
+      Owner: "plateforms-services"
+      SupportDescription: "Please call any time for support"
+      SupportEmail: "dtd-platforms@gre-group.com"
+      SupportUrl: "https://www.example.com"
+      ProvisioningArtifactParameters:
+        -
+          Name: "KMS"
+          Description: "KMS"
+          Info:
+            LoadTemplateFromURL: "https://gre-shared-service-catalog.s3.eu-west-3.amazonaws.com/empty-stack.yaml"
+
+  S3Product:
+    Type: "AWS::ServiceCatalog::CloudFormationProduct"
+    Properties:
+      Name: "S3"
+      Description: "S3 with corporate configuration."
+      Distributor: "GRE"
+      Owner: "plateforms-services"
+      SupportDescription: "Please call any time for support"
+      SupportEmail: "dtd-platforms@gre-group.com"
+      SupportUrl: "https://www.example.com"
+      ProvisioningArtifactParameters:
+        - Name: "S3"
+          Description: "S3 Bucket"
+          Info:
+            LoadTemplateFromURL: "https://gre-shared-service-catalog.s3.eu-west-3.amazonaws.com/empty-stack.yaml"
+
+
+  PostgreSQLtoDatabasePortfolioProductAssociation:
+    Type: "AWS::ServiceCatalog::PortfolioProductAssociation"
+    Properties:
+      PortfolioId: !Ref Portfolio
+      ProductId: !Ref PostgreSQLDatabaseProduct
+
+  MySQLtoDatabasePortfolioProductAssociation:
+    Type: "AWS::ServiceCatalog::PortfolioProductAssociation"
+    Properties:
+      PortfolioId: !Ref Portfolio
+      ProductId: !Ref MySQLDatabaseProduct
+
+  KMSPortfolioProductAssociation:
+    Type: "AWS::ServiceCatalog::PortfolioProductAssociation"
+    Properties:
+      PortfolioId: !Ref Portfolio
+      ProductId: !Ref KMSProduct
+
+  S3PortfolioProductAssociation:
+    Type: "AWS::ServiceCatalog::PortfolioProductAssociation"
+    Properties:
+      PortfolioId: !Ref Portfolio
+      ProductId: !Ref S3Product
+
+  #KMS should be only created on the shared account
+  KMSLaunchConstraint:
+    Type: "AWS::ServiceCatalog::LaunchRoleConstraint"
+    Properties:
+      Description: "Allows the product to launch with the policies granted by the associated role."
+      PortfolioId: !Ref Portfolio
+      ProductId: !Ref KMSProduct
+      RoleArn: !GetAtt KMSLaunchConstraintRole.Arn
+    DependsOn: KMSPortfolioProductAssociation
+
+  S3LaunchConstraint:
+    Type: "AWS::ServiceCatalog::LaunchRoleConstraint"
+    DependsOn: S3PortfolioProductAssociation
+    Properties:
+      Description: "Allows the product to launch with the policies granted by the associated role."
+      PortfolioId: !Ref Portfolio
+      ProductId: !Ref S3Product
+      LocalRoleName : S3LaunchConstraintRole
+
+  PostgreSQLDatabaseLaunchConstraint:
+    Type: "AWS::ServiceCatalog::LaunchRoleConstraint"
+    DependsOn: PostgreSQLtoDatabasePortfolioProductAssociation
+    Properties:
+      Description: "Allows the product to launch with the policies granted by the associated role."
+      PortfolioId: !Ref Portfolio
+      ProductId: !Ref PostgreSQLDatabaseProduct
+      LocalRoleName: RDSLaunchConstraintRole
+
+  KMSLaunchConstraintRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Path: "/"
+      ManagedPolicyArns:
+        # Permissions required by AWS Service for macro Lambda isResourceExist
+        - arn:aws:iam::aws:policy/AWSLambdaFullAccess
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: "servicecatalog.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: "AllowProductLaunch"
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: '*'
+                Effect: "Allow"
+                Action:
+                  # Permissions required for the provisioning of the kms
+                  - kms:Create*
+                  - kms:Describe*
+                  - kms:Get*
+                  - kms:ListAliases
+                  - kms:DeleteAlias
+                  - kms:TagResource
+                  # Permissions required by AWS Service Catalog to create stack
+                  - cloudformation:GetTemplateSummary
+                  - s3:GetObject
+              - Resource:
+                  - "arn:aws:cloudformation:*:*:stack/SC-*"
+                  - "arn:aws:cloudformation:*:*:changeSet/SC-*"
+                  - "arn:aws:cloudformation:*:*:transform/*"
+                Effect: "Allow"
+                Action:
+                  # Permissions required by AWS Service Catalog to create stack
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStacks
+                  - cloudformation:SetStackPolicy
+                  - cloudformation:ValidateTemplate
+                  - cloudformation:UpdateStack
+                  - cloudformation:CreateChangeSet
+
+  SharePortfolioWithChildAccountSandbox:
+    Type: "AWS::ServiceCatalog::PortfolioShare"
+    Properties:
+      AccountId: !FindInMap [ Constants, 'sandbox', AccountId ]
+      PortfolioId: !Ref Portfolio
+
+  SharePortfolioWithChildAccountDev:
+    Type: "AWS::ServiceCatalog::PortfolioShare"
+    Properties:
+      AccountId: !FindInMap [ Constants, 'dev', AccountId ]
+      PortfolioId: !Ref Portfolio
+
+  SharePortfolioWithChildAccountQa:
+    Type: "AWS::ServiceCatalog::PortfolioShare"
+    Properties:
+      AccountId: !FindInMap [ Constants, 'qa', AccountId ]
+      PortfolioId: !Ref Portfolio
+
+  SharePortfolioWithChildAccountPreprod:
+    Type: "AWS::ServiceCatalog::PortfolioShare"
+    Properties:
+      AccountId: !FindInMap [ Constants, 'preprod', AccountId ]
+      PortfolioId: !Ref Portfolio
+
+  SharePortfolioWithChildAccountProd:
+    Type: "AWS::ServiceCatalog::PortfolioShare"
+    Properties:
+      AccountId: !FindInMap [ Constants, 'prod', AccountId ]
+      PortfolioId: !Ref Portfolio
+
+
+Outputs:
+  PortfolioID:
+    Description: Portfolio Service Catalog Portfolio ID
+    Export:
+      Name: !Sub PortfolioID
+    Value: !Ref Portfolio
+  PostgreSQLDatabaseProductID:
+    Description: PostgreSQLDatabase Service Catalog Product ID
+    Export:
+      Name: !Sub PostgreSQLDatabaseProductID
+    Value: !Ref PostgreSQLDatabaseProduct
+  KMSProductID:
+    Description: KMSDatabase Service Catalog Product ID
+    Export:
+      Name: !Sub KMSProductID
+    Value: !Ref KMSProduct
+  KMSLaunchConstraintRoleARN:
+    Description: KMS Launch Constraint Role ARN
+    Export:
+      Name: !Sub KMSLaunchConstraintRoleARN
+    Value: !GetAtt KMSLaunchConstraintRole.Arn
+  S3ProductID:
+    Description: S3 Service Catalog Product ID
+    Export:
+      Name: !Sub S3ProductID
+    Value: !Ref S3Product
+  MySQLDatabaseProductID:
+    Description: MySQLDatabase Service Catalog Product ID
+    Export:
+      Name: !Sub MySQLDatabaseProductID
+    Value: !Ref MySQLDatabaseProduct

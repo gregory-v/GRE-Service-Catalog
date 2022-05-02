@@ -1,0 +1,9 @@
+{ 
+    "SchemaVersion": "1.0", 
+    "ProductVersionName": "1.0",
+    "ProductVersionDescription": "1.0 version",
+    "ProductType": "CLOUD_FORMATION_TEMPLATE", 
+    "Properties": { 
+        "TemplateFilePath": "/products/rds/stack-rds-mysql.yaml"
+    } 
+} 

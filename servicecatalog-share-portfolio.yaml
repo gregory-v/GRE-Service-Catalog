@@ -1,0 +1,56 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: This template accept a portfolio shared.
+# Parameters used by codePipeline
+# Remove these parameters only if you remove ParameterOverrides from pipeline
+Parameters:
+  PortfolioID:
+    Description: The ID of the Portfolio
+    Type: String
+    AllowedPattern: '[\x20-\x7E]*'
+    Default: ""
+    ConstraintDescription: Can contain only ASCII characters.
+
+Resources:
+  AcceptEngineeringPortfolioShare:
+    Type: "AWS::ServiceCatalog::AcceptedPortfolioShare"
+    Properties:
+      PortfolioId: !Ref PortfolioID
+  PortfolioPrincipalAssociation:
+    Type: "AWS::ServiceCatalog::PortfolioPrincipalAssociation"
+    DependsOn: AcceptEngineeringPortfolioShare
+    Properties:
+      PortfolioId: !Ref PortfolioID
+      PrincipalARN: !Sub arn:aws:iam::${AWS::AccountId}:role/gre-admins
+      PrincipalType: "IAM"
+  PortfolioDeployerRolePrincipalAssociation:
+    Type: "AWS::ServiceCatalog::PortfolioPrincipalAssociation"
+    DependsOn: AcceptEngineeringPortfolioShare
+    Properties:
+      PortfolioId: !Ref PortfolioID
+      PrincipalARN: !Sub arn:aws:iam::${AWS::AccountId}:role/DeployerRole
+      PrincipalType: "IAM"
+  PortfolioRDSLaunchConstraintRoleAssociation:
+    Type: "AWS::ServiceCatalog::PortfolioPrincipalAssociation"
+    DependsOn: AcceptEngineeringPortfolioShare
+    Properties:
+      PortfolioId: !Ref PortfolioID
+      PrincipalARN: !Sub arn:aws:iam::${AWS::AccountId}:role/RDSLaunchConstraintRole
+      PrincipalType: "IAM"
+  PortfolioS3LaunchConstraintRoleAssociation:
+    Type: "AWS::ServiceCatalog::PortfolioPrincipalAssociation"
+    DependsOn: AcceptEngineeringPortfolioShare
+    Properties:
+      PortfolioId: !Ref PortfolioID
+      PrincipalARN: !Sub arn:aws:iam::${AWS::AccountId}:role/S3LaunchConstraintRole
+      PrincipalType: "IAM"
+
+
+
+
+
+
+
+
+
+
+

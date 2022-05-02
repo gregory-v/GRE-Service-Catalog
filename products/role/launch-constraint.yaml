@@ -1,0 +1,162 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: RDSLaunchConstraintRole & S3LaunchConstraintRole to deploy an Amazon RDS database instance and S3
+Resources:
+  RDSLaunchConstraintRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: RDSLaunchConstraintRole
+      Path: "/"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - servicecatalog.amazonaws.com
+                - cloudformation.amazonaws.com
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: "AllowProductLaunch"
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: '*'
+                Effect: "Allow"
+                Action:
+                  # Permissions required for the provisioning of the database
+                  - rds:*
+                  - ec2:DescribeAccountAttributes
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeSecurityGroupReferences
+                  - ec2:DescribeStaleSecurityGroups
+                  - ec2:CreateSecurityGroup
+                  - ec2:DeleteSecurityGroup
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:AuthorizeSecurityGroupEgress
+                  - ec2:UpdateSecurityGroupRuleDescriptionsIngress
+                  - ec2:UpdateSecurityGroupRuleDescriptionsEgress
+                  - ec2:RevokeSecurityGroupEgress
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:CreateTags
+                  # Permissions required by AWS Service Catalog to create stack
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:CreateChangeSet
+                  - s3:GetObject
+                  # Permissions required for the provisioning of secret
+                  - secretsmanager:*
+                  # Permissions required for the provisioning the alias dns
+                  - route53:*
+                  # Permissions required for using the kms
+                  - kms:*
+                  # Permission to execute lambda MacroGetKmsIdFromKmsAlias
+                  - lambda:*
+                  # Permission to manage DBRole
+                  - iam:CreateRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  # Permission to delete DBRole ROLLBACK
+                  - iam:DeleteRole
+                  # Permission for current alias
+                  - ssm:GetParameters
+                  # Permission IAM tagging & role
+                  - iam:TagRole
+                  - iam:TagUser
+                  - iam:PutRolePolicy
+                  - iam:GetPolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+              - Resource:
+                  - "arn:aws:cloudformation:*:*:stack/SC-*"
+                  - "arn:aws:cloudformation:*:*:changeSet/SC-*"
+                Effect: "Allow"
+                Action:
+                  # Permissions required by AWS Service Catalog to create stack
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStacks
+                  - cloudformation:SetStackPolicy
+                  - cloudformation:ValidateTemplate
+                  - cloudformation:UpdateStack
+
+  S3LaunchConstraintRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: S3LaunchConstraintRole
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        # Permissions required by AWS Service for deleteContent Lambda
+        - arn:aws:iam::aws:policy/AWSLambdaFullAccess
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - servicecatalog.amazonaws.com
+                - cloudformation.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: AllowProductLaunch
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Resource: '*'
+                Effect: "Allow"
+                Action:
+                  - iam:ListRolePolicies
+                  - iam:ListPolicies
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:ListRoles
+                  - iam:CreateRole
+                  - iam:DetachRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  # Permissions required by AWS Service Catalog to create stack
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:CreateChangeSet
+                  - s3:GetObject
+                  # Permission to execute lambda DeleteBucketContentsLambda
+                  - lambda:*
+                  # Permission for current alias
+                  - ssm:GetParameters
+                  # Permission for delete bucket policy of private bucket
+                  - s3:DeleteBucketPolicy
+              - Resource:
+                  - "arn:aws:cloudformation:*:*:stack/SC-*"
+                  - "arn:aws:cloudformation:*:*:changeSet/SC-*"
+                Effect: "Allow"
+                Action:
+                  # Permissions required by AWS Service Catalog to create stack
+                  - cloudformation:CreateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStacks
+                  - cloudformation:SetStackPolicy
+                  - cloudformation:ValidateTemplate
+                  - cloudformation:UpdateStack
+              # Permissions required by AWS Service Catalog for CloudFormationProvisionedProduct
+              - Resource:
+                  - "arn:aws:servicecatalog:*:*:*/*"
+                  - "arn:aws:catalog:*:*:*/*"
+                Effect: "Allow"
+                Action:
+                  - servicecatalog:DescribeProduct
+                  - servicecatalog:DescribeProductView
+                  - servicecatalog:DescribeProvisioningParameters
+                  - servicecatalog:DescribeRecord
+                  - servicecatalog:ListLaunchPaths
+                  - servicecatalog:ListRecordHistory
+                  - servicecatalog:ProvisionProduct
+                  - servicecatalog:ScanProvisionedProducts
+                  - servicecatalog:SearchProducts
+                  - servicecatalog:TerminateProvisionedProduct
+                  - servicecatalog:UpdateProvisionedProduct
+                  - servicecatalog:DescribeProvisionedProduct

@@ -1,0 +1,225 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: |
+  Initializer template ServiceCatalog
+
+Mappings:
+  Constants:
+    'sandbox':
+      ArnValue: arn:aws:iam::111111111111:role/CodePipelineRole
+    'dev':
+      ArnValue: arn:aws:iam::222222222222:role/CodePipelineRole
+    'qa':
+      ArnValue: arn:aws:iam::333333333333:role/CodePipelineRole
+    'preprod':
+      ArnValue: arn:aws:iam::444444444444:role/CodePipelineRole
+    'prod':
+      ArnValue: arn:aws:iam::555555555555:role/CodePipelineRole
+    'shared':
+      ArnValue: arn:aws:iam::999999999999:role/CodePipelineRole
+    'RepositoryBranch':
+      Value: master
+    'RepositoryName':
+      Value: GRE-Service-Catalog
+
+Resources:
+  CodePipelineRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: CodePipelineRole
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+                - cloudformation.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: codepipeline-service
+          PolicyDocument:
+            Statement:
+              - Action: 'sts:AssumeRole'
+                Resource:
+                  - !FindInMap [ Constants, 'sandbox', ArnValue ]
+                  - !FindInMap [ Constants, 'dev', ArnValue ]
+                  - !FindInMap [ Constants, 'qa', ArnValue ]
+                  - !FindInMap [ Constants, 'preprod', ArnValue ]
+                  - !FindInMap [ Constants, 'prod', ArnValue ]
+                Effect: Allow
+              - Action:
+                  - 'codecommit:GetBranch'
+                  - 'codecommit:GetCommit'
+                  - 'codecommit:UploadArchive'
+                  - 'codecommit:GetUploadArchiveStatus'
+                  - 'codecommit:CancelUploadArchive'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:GetBucketVersioning'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 's3:PutObject'
+                Resource:
+                  - 'arn:aws:s3:::codepipeline*'
+                  - 'arn:aws:s3:::elasticbeanstalk*'
+                Effect: Allow
+              - Action:
+                  - 'codedeploy:CreateDeployment'
+                  - 'codedeploy:GetApplicationRevision'
+                  - 'codedeploy:GetDeployment'
+                  - 'codedeploy:GetDeploymentConfig'
+                  - 'codedeploy:RegisterApplicationRevision'
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 'elasticbeanstalk:*'
+                  - 'ec2:*'
+                  - 'elasticloadbalancing:*'
+                  - 'autoscaling:*'
+                  - 'cloudwatch:*'
+                  - 's3:*'
+                  - 'sns:*'
+                  - 'cloudformation:*'
+                  - 'rds:*'
+                  - 'sqs:*'
+                  - 'ecs:*'
+                  - 'servicecatalog:*'
+                  - 'iam:PassRole'
+                  - 'iam:GetGroup'
+                  - 'iam:GetRole'
+                  - 'iam:DeleteRole'
+                  - 'iam:PutRolePolicy'
+                  - 'iam:DeleteRolePolicy'
+                  - "iam:AttachRolePolicy"
+                Resource: '*'
+                Effect: Allow
+              - Action:
+                  - 'lambda:InvokeFunction'
+                  - 'lambda:ListFunctions'
+                Resource: '*'
+                Effect: Allow
+            Version: 2012-10-17
+
+  InitializerProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: servicecatalog-product-initialiser
+      Description: "Initializer for the framework"
+      ServiceRole:  !Sub arn:aws:iam::${AWS::AccountId}:role/servicecatalog/ServiceCatalogInitializer
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: linuxContainer
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:2.0
+        EnvironmentVariables:
+          - Name: REPOSITORY_NAME
+            Type: PLAINTEXT
+            Value: !FindInMap [ Constants, 'RepositoryName', Value ]
+
+          - Name: REPOSITORY_BRANCH
+            Type: PLAINTEXT
+            Value: !FindInMap [ Constants, 'RepositoryBranch', Value ]
+
+          - Name: SERVICECATALOG_PRODUCT_INITIALIZATION_TEMPLATE
+            Type: PLAINTEXT
+            Value: servicecatalog-product-initialization.yaml
+
+          - Name: CODEPIPELINE_TEMPLATE
+            Type: PLAINTEXT
+            Value: servicecatalog-pipeline.yaml
+
+          - Name: CODEPIPELINE_ROLE_CHILD_ACCOUNT_TEMPLATE
+            Type: PLAINTEXT
+            Value: servicecatalog-pipeline-role-child-account.yaml
+
+          - Name: CODEPIPELINE_KMS_TEMPLATE
+            Type: PLAINTEXT
+            Value: servicecatalog-pipeline-kms.yaml
+
+          - Name: LAUNCH_CONSTRAINT_ROLE_TEMPLATE
+            Type: PLAINTEXT
+            Value: products/role/launch-constraint.yaml
+
+          - Name: MACRO_KMS_ALIAS_TEMPLATE
+            Type: PLAINTEXT
+            Value: products/macro/getKmsIdFromKmsAlias.yaml
+
+          - Name: MACRO_RESOURCE_EXIST_TEMPLATE
+            Type: PLAINTEXT
+            Value: products/macro/isResourceExist.yaml
+
+
+      Source:
+        Type: CODECOMMIT
+        Location : https://git-codecommit.eu-west-3.amazonaws.com/v1/repos/GRE-Service-Catalog
+        BuildSpec: |
+          version: 0.2
+          env:
+            variables:
+              ASSUME_ROLE_SANDBOX_ARN : "arn:aws:iam::111111111111:role/DeployerRole"
+              ASSUME_ROLE_DEV_ARN : "arn:aws:iam::222222222222:role/DeployerRole"
+              ASSUME_ROLE_QA_ARN : "arn:aws:iam::333333333333:role/DeployerRole"
+              ASSUME_ROLE_PREPROD_ARN : "arn:aws:iam::444444444444:role/DeployerRole"
+              ASSUME_ROLE_PROD_ARN : "arn:aws:iam::555555555555:role/DeployerRole"
+
+          phases:
+
+            build:
+              commands:
+                ######################################## Initializing all empty products and constraints on Shared account
+                - echo Initializing all empty products
+                - aws cloudformation create-stack --stack-name servicecatalog-launch-constraint-role --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM --template-body file://${LAUNCH_CONSTRAINT_ROLE_TEMPLATE}
+                - aws cloudformation wait stack-create-complete --stack-name servicecatalog-launch-constraint-role
+                - aws cloudformation create-stack --stack-name servicecatalog-product-initialization --capabilities CAPABILITY_IAM --template-body file://${SERVICECATALOG_PRODUCT_INITIALIZATION_TEMPLATE}
+                - aws cloudformation wait stack-create-complete --stack-name servicecatalog-product-initialization
+
+                ######################################## Creating cross-accounts KMS for ArtifactStore
+                - echo Creating cross-accounts KMS for ArtifactStore
+                - aws cloudformation create-stack --stack-name servicecatalog-pipeline-kms --capabilities CAPABILITY_IAM --template-body file://${CODEPIPELINE_KMS_TEMPLATE}
+                - aws cloudformation wait stack-create-complete --stack-name servicecatalog-pipeline-kms
+
+                ######################################## Exporting cross-accounts KMS for ArtifactStore
+                - echo Exporting cross-accounts KMS
+                - export KMS_CODEPIPELINE_CROSSACCOUNTS=$(aws cloudformation describe-stacks --stack-name servicecatalog-pipeline-kms --query 'Stacks[].Outputs[?OutputKey==`CMK`].OutputValue' --output text)
+
+                ######################################## Assuming role for Child accounts
+                - ROLES="${ASSUME_ROLE_SANDBOX_ARN} ${ASSUME_ROLE_DEV_ARN} ${ASSUME_ROLE_QA_ARN} ${ASSUME_ROLE_PREPROD_ARN} ${ASSUME_ROLE_PROD_ARN}"
+                - for value in $ROLES;
+                    do
+                      echo Assuming role for $value account;
+                      TEMP_ROLE=`aws sts assume-role --role-arn $value --role-session-name deployer`;
+                      export TEMP_ROLE;
+                      export AWS_ACCESS_KEY_ID=$(echo "${TEMP_ROLE}" | jq -r '.Credentials.AccessKeyId');
+                      export AWS_SECRET_ACCESS_KEY=$(echo "${TEMP_ROLE}" | jq -r '.Credentials.SecretAccessKey');
+                      export AWS_SESSION_TOKEN=$(echo "${TEMP_ROLE}" | jq -r '.Credentials.SessionToken');
+                      echo Creating pipeline role for $value account;
+                      aws cloudformation create-stack --stack-name servicecatalog-launch-constraint-role --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM --template-body file://${LAUNCH_CONSTRAINT_ROLE_TEMPLATE};
+                      aws cloudformation wait stack-create-complete --stack-name servicecatalog-launch-constraint-role;
+                      aws cloudformation create-stack --stack-name servicecatalog-pipeline-role --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM --template-body file://${CODEPIPELINE_ROLE_CHILD_ACCOUNT_TEMPLATE} --parameters ParameterKey=KMSCrossAccount,ParameterValue=${KMS_CODEPIPELINE_CROSSACCOUNTS};
+                      aws cloudformation wait stack-create-complete --stack-name servicecatalog-pipeline-role;
+                      echo Creating macros;
+                      aws cloudformation create-stack --stack-name macroGetKmsIdFromKmsAlias --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM --template-body file://${MACRO_KMS_ALIAS_TEMPLATE};
+                      aws cloudformation wait stack-create-complete --stack-name macroGetKmsIdFromKmsAlias;
+                      unset AWS_ACCESS_KEY_ID;
+                      unset AWS_SECRET_ACCESS_KEY;
+                      unset AWS_SESSION_TOKEN;
+                    done
+
+                ######################################## Assuming role for Shared account
+                - echo Creating macros;
+                - aws cloudformation create-stack --stack-name IsResourceExist --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM --template-body file://${MACRO_RESOURCE_EXIST_TEMPLATE}
+                - aws cloudformation wait stack-create-complete --stack-name IsResourceExist
+                ######################################## Creating pipeline on Shared account
+                - echo Creating pipeline
+                - aws cloudformation create-stack --stack-name servicecatalog-pipeline --capabilities CAPABILITY_IAM --template-body file://${CODEPIPELINE_TEMPLATE}
+                - aws cloudformation wait stack-create-complete --stack-name servicecatalog-pipeline
+
+
+      SourceVersion: refs/heads/master
+      TimeoutInMinutes: 60
